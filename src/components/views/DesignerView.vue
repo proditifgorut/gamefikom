@@ -63,7 +63,7 @@ const props = defineProps<{
 }>();
 
 const containerRef = ref<HTMLElement | null>(null);
-const tableNodeRefs = ref<Record<string, ComponentPublicInstance>>({});
+const tableNodeRefs = ref<Record<string, Element | ComponentPublicInstance | null>>({});
 
 const nodes = ref<Node[]>([]);
 const edges = ref<Edge[]>([]);
@@ -103,7 +103,7 @@ const calculateEdges = () => {
 
   // Update node dimensions
   nodes.value.forEach(node => {
-    const el = tableNodeRefs.value[node.id];
+    const el = tableNodeRefs.value[node.id] as ComponentPublicInstance;
     if (el && el.$el) {
       node.width = el.$el.offsetWidth;
       node.height = el.$el.offsetHeight;
