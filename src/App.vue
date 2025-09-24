@@ -4,7 +4,7 @@
       <div class="flex items-center justify-between h-14 px-4">
         <div class="flex items-center gap-3">
           <Server class="w-6 h-6" />
-          <h1 class="text-lg font-semibold">Multi-DB MySQL Editor</h1>
+          <h1 class="text-lg font-semibold">ProdiTIF | MySQL Editor</h1>
         </div>
         <div class="flex items-center gap-4 text-sm">
           <div v-if="isDemoMode" class="flex items-center gap-1.5 bg-blue-500 px-2 py-1 rounded-full text-xs font-medium">
