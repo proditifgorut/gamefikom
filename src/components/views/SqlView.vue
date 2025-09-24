@@ -90,7 +90,7 @@ const queryHelpers = [
   { type: 'UPDATE', label: 'UPDATE', icon: FilePen },
   { type: 'DELETE', label: 'DELETE', icon: FileX },
   { type: 'CREATE_TABLE', label: 'CREATE TABLE', icon: Table },
-];
+] as const;
 
 const generateQuery = (type: QueryType) => {
   const tableName = props.table ? `\`${props.table}\`` : '`your_table`';

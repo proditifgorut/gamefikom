@@ -38,7 +38,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch, nextTick } from 'vue';
+import { ref, computed, onMounted, watch, nextTick, ComponentPublicInstance } from 'vue';
 import { reactiveMockServer } from '../../services/apiService';
 import TableNode from '../nodes/TableNode.vue';
 import type { TableDetails } from '../../types';
@@ -63,7 +63,7 @@ const props = defineProps<{
 }>();
 
 const containerRef = ref<HTMLElement | null>(null);
-const tableNodeRefs = ref<Record<string, HTMLElement>>({});
+const tableNodeRefs = ref<Record<string, ComponentPublicInstance>>({});
 
 const nodes = ref<Node[]>([]);
 const edges = ref<Edge[]>([]);
@@ -72,14 +72,14 @@ const svgDimensions = ref({ width: 0, height: 0 });
 const dbDetails = computed(() => reactiveMockServer.value[props.database]);
 
 const calculateLayout = async () => {
-  if (!dbDetails.value) return;
+  if (!dbDetails.value || !containerRef.value) return;
 
   const tableEntries = Object.values(dbDetails.value);
   const nodeWidth = 200;
   const nodeHeight = 150; // Estimate
   const gapX = 100;
   const gapY = 50;
-  const cols = Math.floor(containerRef.value?.clientWidth / (nodeWidth + gapX)) || 3;
+  const cols = Math.floor(containerRef.value.clientWidth / (nodeWidth + gapX)) || 3;
 
   nodes.value = tableEntries.map((table, i) => ({
     id: table.name,
@@ -104,9 +104,9 @@ const calculateEdges = () => {
   // Update node dimensions
   nodes.value.forEach(node => {
     const el = tableNodeRefs.value[node.id];
-    if (el) {
-      node.width = el.offsetWidth;
-      node.height = el.offsetHeight;
+    if (el && el.$el) {
+      node.width = el.$el.offsetWidth;
+      node.height = el.$el.offsetHeight;
     }
     maxWidth = Math.max(maxWidth, node.x + node.width);
     maxHeight = Math.max(maxHeight, node.y + node.height);

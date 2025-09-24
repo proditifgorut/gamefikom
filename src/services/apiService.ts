@@ -1,6 +1,6 @@
 import { ref } from 'vue';
 import axios from 'axios';
-import type { DatabaseConnection, QueryResult, ConnectionStatus, ServerDetails, TableSchema, Sort } from '../types';
+import type { DatabaseConnection, QueryResult, ConnectionStatus, ServerDetails, TableSchema } from '../types';
 import { cloneDeep } from '../utils/cloneDeep';
 
 const api = axios.create({

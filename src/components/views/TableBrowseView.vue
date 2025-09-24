@@ -6,6 +6,10 @@
       <p class="text-gray-600">Choose a table from the navigation to view its data.</p>
     </div>
 
+    <div v-else-if="!tableDetails">
+      <div class="text-center py-12 text-gray-600">Loading table details...</div>
+    </div>
+
     <div v-else>
       <div class="bg-white border border-gray-300 rounded-lg overflow-hidden">
         <!-- Actions Header -->
@@ -102,7 +106,7 @@
     />
     
     <EditRowModal
-      v-if="showEditModal && editingRow"
+      v-if="showEditModal && editingRow && tableDetails"
       :row="editingRow"
       :schema="tableDetails.schema"
       @save="handleSaveRow"

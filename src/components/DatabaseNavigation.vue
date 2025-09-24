@@ -34,7 +34,7 @@
               <div 
                 v-for="table in Object.values(dbDetails[db])" 
                 :key="table.name"
-                @click="$emit('table-selected', table.name)"
+                @click="$emit('tableSelected', table.name)"
                 :class="[
                   'flex items-center gap-2 p-1.5 rounded cursor-pointer text-sm',
                   currentTable === table.name && currentDatabase === db ? 'bg-blue-200' : 'hover:bg-gray-200'

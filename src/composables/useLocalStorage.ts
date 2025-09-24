@@ -4,7 +4,7 @@ export function useLocalStorage<T>(key: string, defaultValue: T): [Ref<T>, (valu
   const storedValue = localStorage.getItem(key);
   const initial = storedValue ? JSON.parse(storedValue) : defaultValue;
   
-  const storedRef = ref<T>(initial);
+  const storedRef = ref(initial) as Ref<T>;
   
   const setValue = (value: T) => {
     storedRef.value = value;
