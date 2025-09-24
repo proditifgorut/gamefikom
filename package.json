@@ -1,0 +1,29 @@
+{
+  "name": "vite-vue-typescript-starter",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc -b && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@monaco-editor/loader": "^1.5.0",
+    "@tailwindcss/forms": "^0.5.7",
+    "@vueuse/core": "^13.9.0",
+    "axios": "^1.12.2",
+    "lucide-vue-next": "^0.511.0",
+    "monaco-editor": "^0.53.0",
+    "vue": "^3.5.15"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.4",
+    "autoprefixer": "^10.4.21",
+    "postcss": "^8.4.35",
+    "tailwindcss": "^3.4.1",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5",
+    "vue-tsc": "^2.2.10"
+  }
+}
