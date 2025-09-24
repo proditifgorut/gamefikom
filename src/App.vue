@@ -36,7 +36,15 @@
         />
       </aside>
 
-      <main class="flex-1 flex flex-col overflow-hidden bg-white">
+      <main class="flex-1 flex flex-col overflow-hidden bg-white relative">
+        <!-- Global Loading Overlay -->
+        <div v-if="executing" class="absolute inset-0 bg-white/70 z-10 flex items-center justify-center">
+          <div class="flex items-center gap-3 text-gray-700 bg-gray-100 px-4 py-2 rounded-lg shadow">
+            <Loader2 class="w-5 h-5 animate-spin" />
+            <span>Processing...</span>
+          </div>
+        </div>
+
         <div v-if="connectionStatus?.connected" class="border-b border-gray-200 px-4 py-2 bg-gray-50/50">
           <div class="text-sm text-gray-600 flex items-center gap-1.5">
             <Server class="w-4 h-4 text-gray-500"/>
@@ -113,7 +121,7 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue';
-import { Database, TestTube, Table, Eye, FileText, Upload, Download, Settings, Server, ChevronRight, BarChart, PlusSquare, Share2 } from 'lucide-vue-next';
+import { Database, TestTube, Table, Eye, FileText, Upload, Download, Settings, Server, ChevronRight, BarChart, PlusSquare, Share2, Loader2 } from 'lucide-vue-next';
 import ConnectionForm from './components/ConnectionForm.vue';
 import DatabaseNavigation from './components/DatabaseNavigation.vue';
 import ServerView from './components/views/ServerView.vue';
@@ -127,6 +135,7 @@ import ImportView from './components/views/ImportView.vue';
 import ExportView from './components/views/ExportView.vue';
 import TableOperationsView from './components/views/TableOperationsView.vue';
 import DesignerView from './components/views/DesignerView.vue';
+import ServerStatusView from './components/views/ServerStatusView.vue';
 import ToastNotification from './components/ToastNotification.vue';
 import type { DatabaseConnection, ConnectionStatus, QueryResult } from './types';
 import { apiService, reactiveMockServer } from './services/apiService';
@@ -184,6 +193,7 @@ const activeTabs = computed(() => {
 const viewMap: Record<string, any> = {
   // Server
   'databases': ServerView,
+  'status': ServerStatusView,
   // Database
   'structure': DatabaseView,
   'new': CreateTableView,
@@ -197,7 +207,6 @@ const viewMap: Record<string, any> = {
   'import': ImportView,
   'export': ExportView,
   'sql': SqlView,
-  'status': ServerView, // Placeholder
 };
 
 const activeView = computed(() => {

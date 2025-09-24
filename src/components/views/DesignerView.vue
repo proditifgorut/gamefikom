@@ -6,7 +6,7 @@
     <div 
       v-for="node in nodes" 
       :key="node.id"
-      :ref="el => tableNodeRefs[node.id] = el"
+      :ref="el => { if (el) tableNodeRefs[node.id] = el as any }"
       class="absolute"
       :style="{ left: `${node.x}px`, top: `${node.y}px` }"
     >
@@ -38,7 +38,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch, nextTick, ComponentPublicInstance } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch, nextTick, ComponentPublicInstance } from 'vue';
 import { reactiveMockServer } from '../../services/apiService';
 import TableNode from '../nodes/TableNode.vue';
 import type { TableDetails } from '../../types';
@@ -63,13 +63,15 @@ const props = defineProps<{
 }>();
 
 const containerRef = ref<HTMLElement | null>(null);
-const tableNodeRefs = ref<Record<string, Element | ComponentPublicInstance | null>>({});
+const tableNodeRefs = ref<Record<string, ComponentPublicInstance>>({});
 
 const nodes = ref<Node[]>([]);
 const edges = ref<Edge[]>([]);
 const svgDimensions = ref({ width: 0, height: 0 });
 
 const dbDetails = computed(() => reactiveMockServer.value[props.database]);
+
+let resizeObserver: ResizeObserver | null = null;
 
 const calculateLayout = async () => {
   if (!dbDetails.value || !containerRef.value) return;
@@ -79,7 +81,8 @@ const calculateLayout = async () => {
   const nodeHeight = 150; // Estimate
   const gapX = 100;
   const gapY = 50;
-  const cols = Math.floor(containerRef.value.clientWidth / (nodeWidth + gapX)) || 3;
+  const containerWidth = containerRef.value.clientWidth;
+  const cols = Math.max(1, Math.floor(containerWidth / (nodeWidth + gapX)));
 
   nodes.value = tableEntries.map((table, i) => ({
     id: table.name,
@@ -103,7 +106,7 @@ const calculateEdges = () => {
 
   // Update node dimensions
   nodes.value.forEach(node => {
-    const el = tableNodeRefs.value[node.id] as ComponentPublicInstance;
+    const el = tableNodeRefs.value[node.id];
     if (el && el.$el) {
       node.width = el.$el.offsetWidth;
       node.height = el.$el.offsetHeight;
@@ -145,8 +148,23 @@ watch(() => props.database, () => {
   calculateLayout();
 }, { immediate: true });
 
-onMounted(() => {
+watch(dbDetails, () => {
   calculateLayout();
-  window.addEventListener('resize', calculateLayout);
+}, { deep: true });
+
+onMounted(() => {
+  if (containerRef.value) {
+    resizeObserver = new ResizeObserver(() => {
+      calculateLayout();
+    });
+    resizeObserver.observe(containerRef.value);
+  }
+  calculateLayout();
+});
+
+onUnmounted(() => {
+  if (resizeObserver && containerRef.value) {
+    resizeObserver.unobserve(containerRef.value);
+  }
 });
 </script>

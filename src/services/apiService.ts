@@ -95,6 +95,10 @@ const mockServer = ref<ServerDetails>(cloneDeep(initialMockServer));
 export const reactiveMockServer = mockServer;
 
 let backendAvailable: boolean | null = null;
+let mockServerStats = {
+  startTime: Date.now(),
+  queriesProcessed: 0,
+};
 
 const checkBackendAvailability = async (): Promise<boolean> => {
   if (backendAvailable !== null) return backendAvailable;
@@ -115,70 +119,79 @@ const getPrimaryKey = (table: any): string | null => {
   return pk ? pk.name : null;
 };
 
-const mockQueryProcessor = async (query: string, currentDb: string): Promise<QueryResult> => {
-  await simulateNetworkDelay();
-  const startTime = performance.now();
-  const normalizedQuery = query.toLowerCase().trim().replace(/;$/, '');
+// --- Refactored Mock Query Processor ---
+type QueryHandler = (query: string, currentDb: string) => QueryResult | null;
 
-  const getExecutionTime = () => Math.round(performance.now() - startTime);
-
-  // --- DATABASE LEVEL ---
-  if (normalizedQuery === 'show databases') {
-    const databases = Object.keys(mockServer.value);
-    return { success: true, data: databases.map(db => ({ 'Database': db })), columns: ['Database'], executionTime: getExecutionTime() };
-  }
-  const createDbMatch = /create database\s+`?([a-zA-Z0-9_]+)`?/.exec(normalizedQuery);
-  if (createDbMatch) {
-    const dbName = createDbMatch[1];
-    if (mockServer.value[dbName]) return { success: false, error: `Database '${dbName}' already exists.` };
-    mockServer.value[dbName] = {};
-    return { success: true, message: `Database '${dbName}' created.`, executionTime: getExecutionTime() };
-  }
-  const dropDbMatch = /drop database\s+`?([a-zA-Z0-9_]+)`?/.exec(normalizedQuery);
-  if (dropDbMatch) {
-    const dbName = dropDbMatch[1];
-    if (!mockServer.value[dbName]) return { success: false, error: `Database '${dbName}' does not exist.` };
-    delete mockServer.value[dbName];
-    return { success: true, message: `Database '${dbName}' dropped.`, executionTime: getExecutionTime() };
-  }
-  
-  const useDbMatch = /use\s+`?([a-zA-Z0-9_]+)`?/.exec(normalizedQuery);
-  if (useDbMatch) {
-    const dbName = useDbMatch[1];
-    if (!mockServer.value[dbName]) return { success: false, error: `Unknown database '${dbName}'` };
-    // In a real scenario, this changes the connection context. Here, we just acknowledge it.
-    return { success: true, message: `Database changed to '${dbName}'.` };
-  }
-
-  // --- TABLE LEVEL ---
-  const db = mockServer.value[currentDb];
-  if (!db && !normalizedQuery.startsWith('create database')) {
-    return { success: false, error: 'No database selected.' };
-  }
-
-  if (normalizedQuery.startsWith('show tables')) {
-    const tables = Object.keys(db);
-    const colName = `Tables_in_${currentDb}`;
-    return { success: true, data: tables.map(t => ({ [colName]: t })), columns: [colName], executionTime: getExecutionTime() };
-  }
-
-  const createTableMatch = /create table\s+`?(\w+)`?\s*\(([\s\S]+)\)/.exec(query.trim()); // Use original query for case-sensitive parsing
-  if (createTableMatch) {
-    const tableName = createTableMatch[1];
-    if (db[tableName]) return { success: false, error: `Table '${tableName}' already exists.` };
-    
-    const schema: TableSchema[] = [];
-    const pkMatch = /primary key\s*\((`?\w+`?)\)/i.exec(createTableMatch[2]);
-    const primaryKey = pkMatch ? pkMatch[1].replace(/`/g, '') : null;
-    
-    const columnDefs = createTableMatch[2].split(/,(?![^()]*\))/);
-
-    for (const colDef of columnDefs) {
+const queryHandlers: { regex: RegExp, handler: QueryHandler }[] = [
+  // SHOW DATABASES
+  {
+    regex: /^show databases$/i,
+    handler: () => {
+      const databases = Object.keys(mockServer.value);
+      return { success: true, data: databases.map(db => ({ 'Database': db })), columns: ['Database'] };
+    }
+  },
+  // CREATE DATABASE
+  {
+    regex: /^create database\s+`?([a-zA-Z0-9_]+)`?/i,
+    handler: (query) => {
+      const match = query.match(/^create database\s+`?([a-zA-Z0-9_]+)`?/i);
+      const dbName = match![1];
+      if (mockServer.value[dbName]) return { success: false, error: `Database '${dbName}' already exists.` };
+      mockServer.value[dbName] = {};
+      return { success: true, message: `Database '${dbName}' created.` };
+    }
+  },
+  // DROP DATABASE
+  {
+    regex: /^drop database\s+`?([a-zA-Z0-9_]+)`?/i,
+    handler: (query) => {
+      const match = query.match(/^drop database\s+`?([a-zA-Z0-9_]+)`?/i);
+      const dbName = match![1];
+      if (!mockServer.value[dbName]) return { success: false, error: `Database '${dbName}' does not exist.` };
+      delete mockServer.value[dbName];
+      return { success: true, message: `Database '${dbName}' dropped.` };
+    }
+  },
+  // USE DATABASE
+  {
+    regex: /^use\s+`?([a-zA-Z0-9_]+)`?/i,
+    handler: (query) => {
+      const match = query.match(/^use\s+`?([a-zA-Z0-9_]+)`?/i);
+      const dbName = match![1];
+      if (!mockServer.value[dbName]) return { success: false, error: `Unknown database '${dbName}'` };
+      return { success: true, message: `Database changed to '${dbName}'.` };
+    }
+  },
+  // SHOW TABLES
+  {
+    regex: /^show tables$/i,
+    handler: (_, currentDb) => {
+      const db = mockServer.value[currentDb];
+      if (!db) return { success: false, error: 'No database selected.' };
+      const tables = Object.keys(db);
+      const colName = `Tables_in_${currentDb}`;
+      return { success: true, data: tables.map(t => ({ [colName]: t })), columns: [colName] };
+    }
+  },
+  // CREATE TABLE
+  {
+    regex: /^create table/i,
+    handler: (query, currentDb) => {
+      const db = mockServer.value[currentDb];
+      if (!db) return { success: false, error: 'No database selected.' };
+      const match = /create table\s+`?(\w+)`?\s*\(([\s\S]+)\)/i.exec(query);
+      if (!match) return null;
+      const tableName = match[1];
+      if (db[tableName]) return { success: false, error: `Table '${tableName}' already exists.` };
+      const schema: TableSchema[] = [];
+      const pkMatch = /primary key\s*\((`?\w+`?)\)/i.exec(match[2]);
+      const primaryKey = pkMatch ? pkMatch[1].replace(/`/g, '') : null;
+      const columnDefs = match[2].split(/,(?![^()]*\))/);
+      for (const colDef of columnDefs) {
         if (colDef.trim().toLowerCase().startsWith('primary key')) continue;
-
         const parts = colDef.trim().split(/\s+/);
         if (parts.length < 2) continue;
-
         const name = parts[0].replace(/`/g, '');
         const type = parts[1];
         const isNull = !/not null/i.test(colDef);
@@ -186,169 +199,213 @@ const mockQueryProcessor = async (query: string, currentDb: string): Promise<Que
         let key: TableSchema['key'] = '';
         if (name === primaryKey || /primary key/i.test(colDef)) key = 'PRI';
         else if (/unique/i.test(colDef)) key = 'UNI';
-        
         const defaultMatch = /default\s+'([^']*)'/i.exec(colDef);
         const defaultValue = defaultMatch ? defaultMatch[1] : null;
-
         schema.push({ name, type, null: isNull, key, default: defaultValue, extra: isAutoIncrement ? 'AUTO_INCREMENT' : '' });
+      }
+      db[tableName] = { name: tableName, rows: 0, engine: 'InnoDB', collation: 'utf8mb4_unicode_ci', schema, data: [] };
+      return { success: true, message: `Table '${tableName}' created.` };
     }
-
-    db[tableName] = { name: tableName, rows: 0, engine: 'InnoDB', collation: 'utf8mb4_unicode_ci', schema, data: [] };
-    return { success: true, message: `Table '${tableName}' created.`, executionTime: getExecutionTime() };
-  }
-
-  const dropTableMatch = /drop table\s+`?(\w+)`?/.exec(normalizedQuery);
-  if (dropTableMatch) {
-    const tableName = dropTableMatch[1];
-    if (!db[tableName]) return { success: false, error: `Table '${tableName}' does not exist.` };
-    delete db[tableName];
-    return { success: true, message: `Table '${tableName}' dropped.` };
-  }
-
-  const truncateTableMatch = /truncate table\s+`?(\w+)`?/.exec(normalizedQuery);
-  if (truncateTableMatch) {
-    const tableName = truncateTableMatch[1];
-    if (!db[tableName]) return { success: false, error: `Table '${tableName}' does not exist.` };
-    db[tableName].data = [];
-    db[tableName].rows = 0;
-    return { success: true, message: `Table '${tableName}' has been truncated.` };
-  }
-
-  const renameTableMatch = /rename table\s+`?(\w+)`?\s+to\s+`?(\w+)`?/.exec(normalizedQuery);
-  if (renameTableMatch) {
-    const oldName = renameTableMatch[1];
-    const newName = renameTableMatch[2];
-    if (!db[oldName]) return { success: false, error: `Table '${oldName}' does not exist.` };
-    if (db[newName]) return { success: false, error: `Table '${newName}' already exists.` };
-    db[newName] = { ...db[oldName], name: newName };
-    delete db[oldName];
-    return { success: true, message: `Table '${oldName}' renamed to '${newName}'.` };
-  }
-
-  const alterTableMatch = /alter table\s+`?(\w+)`?/.exec(normalizedQuery);
-  if (alterTableMatch) {
-    const tableName = alterTableMatch[1];
-    const table = db[tableName];
-    if (!table) return { success: false, error: `Table '${tableName}' not found.` };
-
-    const dropColumnMatch = /drop column\s+`?(\w+)`?/.exec(normalizedQuery);
-    if (dropColumnMatch) {
-      const colName = dropColumnMatch[1];
-      table.schema = table.schema.filter(c => c.name !== colName);
-      table.data.forEach(row => delete row[colName]);
-      return { success: true, message: `Column '${colName}' dropped.` };
+  },
+  // DROP TABLE
+  {
+    regex: /^drop table\s+`?(\w+)`?/i,
+    handler: (query, currentDb) => {
+      const db = mockServer.value[currentDb];
+      if (!db) return { success: false, error: 'No database selected.' };
+      const match = query.match(/^drop table\s+`?(\w+)`?/i);
+      const tableName = match![1];
+      if (!db[tableName]) return { success: false, error: `Table '${tableName}' does not exist.` };
+      delete db[tableName];
+      return { success: true, message: `Table '${tableName}' dropped.` };
     }
-
-    const addColumnMatch = /add column\s+`?(\w+)`?\s+([\w\(\)]+)/.exec(normalizedQuery);
-    if (addColumnMatch) {
-      const colName = addColumnMatch[1];
-      const colType = addColumnMatch[2];
-      table.schema.push({ name: colName, type: colType, null: true, key: '', default: null, extra: '' });
-      table.data.forEach(row => row[colName] = null);
-      return { success: true, message: `Column '${colName}' added.` };
+  },
+  // TRUNCATE TABLE
+  {
+    regex: /^truncate table\s+`?(\w+)`?/i,
+    handler: (query, currentDb) => {
+      const db = mockServer.value[currentDb];
+      if (!db) return { success: false, error: 'No database selected.' };
+      const match = query.match(/^truncate table\s+`?(\w+)`?/i);
+      const tableName = match![1];
+      if (!db[tableName]) return { success: false, error: `Table '${tableName}' does not exist.` };
+      db[tableName].data = [];
+      db[tableName].rows = 0;
+      return { success: true, message: `Table '${tableName}' has been truncated.` };
     }
-  }
-
-  // --- ROW LEVEL ---
-  if (normalizedQuery.startsWith('select')) {
-    const tableMatch = /from\s+`?(\w+)`?/.exec(normalizedQuery);
-    if (tableMatch && tableMatch[1]) {
+  },
+  // RENAME TABLE
+  {
+    regex: /^rename table\s+`?(\w+)`?\s+to\s+`?(\w+)`?/i,
+    handler: (query, currentDb) => {
+      const db = mockServer.value[currentDb];
+      if (!db) return { success: false, error: 'No database selected.' };
+      const match = query.match(/^rename table\s+`?(\w+)`?\s+to\s+`?(\w+)`?/i);
+      const oldName = match![1];
+      const newName = match![2];
+      if (!db[oldName]) return { success: false, error: `Table '${oldName}' does not exist.` };
+      if (db[newName]) return { success: false, error: `Table '${newName}' already exists.` };
+      db[newName] = { ...db[oldName], name: newName };
+      delete db[oldName];
+      return { success: true, message: `Table '${oldName}' renamed to '${newName}'.` };
+    }
+  },
+  // ALTER TABLE
+  {
+    regex: /^alter table\s+`?(\w+)`?/i,
+    handler: (query, currentDb) => {
+      const db = mockServer.value[currentDb];
+      if (!db) return { success: false, error: 'No database selected.' };
+      const tableMatch = query.match(/^alter table\s+`?(\w+)`?/i);
+      const tableName = tableMatch![1];
+      const table = db[tableName];
+      if (!table) return { success: false, error: `Table '${tableName}' not found.` };
+      const dropColumnMatch = /drop column\s+`?(\w+)`?/i.exec(query);
+      if (dropColumnMatch) {
+        const colName = dropColumnMatch[1];
+        table.schema = table.schema.filter(c => c.name !== colName);
+        table.data.forEach(row => delete row[colName]);
+        return { success: true, message: `Column '${colName}' dropped.` };
+      }
+      const addColumnMatch = /add column\s+`?(\w+)`?\s+([\w\(\)]+)/i.exec(query);
+      if (addColumnMatch) {
+        const colName = addColumnMatch[1];
+        const colType = addColumnMatch[2];
+        table.schema.push({ name: colName, type: colType, null: true, key: '', default: null, extra: '' });
+        table.data.forEach(row => row[colName] = null);
+        return { success: true, message: `Column '${colName}' added.` };
+      }
+      return null;
+    }
+  },
+  // SELECT
+  {
+    regex: /^select/i,
+    handler: (query, currentDb) => {
+      const db = mockServer.value[currentDb];
+      if (!db) return { success: false, error: 'No database selected.' };
+      const tableMatch = /from\s+`?(\w+)`?/i.exec(query);
+      if (!tableMatch) return { success: false, error: `Could not find table name in SELECT query.` };
       const tableName = tableMatch[1];
       const table = db[tableName];
-      if (table) {
-        let data = [...table.data];
-        const totalRows = data.length;
-
-        const orderMatch = /order by\s+`?(\w+)`?\s+(asc|desc)/.exec(normalizedQuery);
-        if (orderMatch) {
-          const col = orderMatch[1];
-          const dir = orderMatch[2];
-          data.sort((a, b) => {
-            if (a[col] < b[col]) return dir === 'asc' ? -1 : 1;
-            if (a[col] > b[col]) return dir === 'asc' ? 1 : -1;
-            return 0;
-          });
-        }
-
-        const limitMatch = /limit\s+(\d+)/.exec(normalizedQuery);
-        const offsetMatch = /offset\s+(\d+)/.exec(normalizedQuery);
-        if (limitMatch) {
-          const limit = parseInt(limitMatch[1]);
-          const offset = offsetMatch ? parseInt(offsetMatch[1]) : 0;
-          data = data.slice(offset, offset + limit);
-        }
-
-        return { success: true, data, columns: table.schema.map(s => s.name), totalRows, executionTime: getExecutionTime() };
+      if (!table) return { success: false, error: `Table '${tableName}' not found in database '${currentDb}'` };
+      
+      let data = [...table.data];
+      const totalRows = data.length;
+      const orderMatch = /order by\s+`?(\w+)`?\s+(asc|desc)/i.exec(query);
+      if (orderMatch) {
+        const col = orderMatch[1];
+        const dir = orderMatch[2];
+        data.sort((a, b) => {
+          if (a[col] < b[col]) return dir.toLowerCase() === 'asc' ? -1 : 1;
+          if (a[col] > b[col]) return dir.toLowerCase() === 'asc' ? 1 : -1;
+          return 0;
+        });
       }
+      const limitMatch = /limit\s+(\d+)/i.exec(query);
+      const offsetMatch = /offset\s+(\d+)/i.exec(query);
+      if (limitMatch) {
+        const limit = parseInt(limitMatch[1]);
+        const offset = offsetMatch ? parseInt(offsetMatch[1]) : 0;
+        data = data.slice(offset, offset + limit);
+      }
+      return { success: true, data, columns: table.schema.map(s => s.name), totalRows };
     }
-    return { success: false, error: `Table not found in database '${currentDb}'` };
-  }
-
-  const insertMatch = /insert into\s+`?(\w+)`?\s*(?:\(([^)]+)\))?\s+values\s*\(([^)]+)\)/.exec(query.trim());
-  if (insertMatch) {
-    const tableName = insertMatch[1];
-    const table = db[tableName];
-    if (!table) return { success: false, error: `Table '${tableName}' not found.` };
-    
-    const columns = insertMatch[2] ? insertMatch[2].split(',').map(c => c.trim().replace(/`/g, '')) : table.schema.filter(c => c.extra !== 'AUTO_INCREMENT').map(c => c.name);
-    const values = insertMatch[3].split(',').map(v => v.trim().replace(/^'|'$/g, ''));
-    
-    const newRow: any = {};
-    const pk = getPrimaryKey(table);
-    if(pk && table.schema.find(c => c.name === pk)?.extra === 'AUTO_INCREMENT') {
-        let maxId = 0;
-        table.data.forEach(r => { if(r[pk] > maxId) maxId = r[pk]; });
-        newRow[pk] = maxId + 1;
+  },
+  // INSERT
+  {
+    regex: /^insert into/i,
+    handler: (query, currentDb) => {
+      const db = mockServer.value[currentDb];
+      if (!db) return { success: false, error: 'No database selected.' };
+      const match = /insert into\s+`?(\w+)`?\s*(?:\(([^)]+)\))?\s+values\s*\(([^)]+)\)/i.exec(query);
+      if (!match) return null;
+      const tableName = match[1];
+      const table = db[tableName];
+      if (!table) return { success: false, error: `Table '${tableName}' not found.` };
+      const columns = match[2] ? match[2].split(',').map(c => c.trim().replace(/`/g, '')) : table.schema.filter(c => c.extra !== 'AUTO_INCREMENT').map(c => c.name);
+      const values = match[3].split(',').map(v => v.trim().replace(/^'|'$/g, ''));
+      const newRow: any = {};
+      const pk = getPrimaryKey(table);
+      if(pk && table.schema.find(c => c.name === pk)?.extra === 'AUTO_INCREMENT') {
+          let maxId = table.data.reduce((max, r) => Math.max(max, Number(r[pk]) || 0), 0);
+          newRow[pk] = maxId + 1;
+      }
+      columns.forEach((col, i) => { newRow[col] = values[i]; });
+      table.data.push(newRow);
+      table.rows = table.data.length;
+      return { success: true, message: '1 row inserted.', rowsAffected: 1 };
     }
-
-    columns.forEach((col, i) => { newRow[col] = values[i]; });
-    table.data.push(newRow);
-    table.rows = table.data.length;
-    return { success: true, message: '1 row inserted.', rowsAffected: 1, executionTime: getExecutionTime() };
-  }
-
-  const updateMatch = /update\s+`?(\w+)`?\s+set\s+(.+)\s+where\s+`?(\w+)`?\s*=\s*'?(.*?)'?$/.exec(query.trim());
-  if (updateMatch) {
-      const tableName = updateMatch[1];
+  },
+  // UPDATE
+  {
+    regex: /^update/i,
+    handler: (query, currentDb) => {
+      const db = mockServer.value[currentDb];
+      if (!db) return { success: false, error: 'No database selected.' };
+      const match = /update\s+`?(\w+)`?\s+set\s+(.+)\s+where\s+`?(\w+)`?\s*=\s*'?(.*?)'?$/i.exec(query);
+      if (!match) return null;
+      const tableName = match[1];
       const table = db[tableName];
       if (!table) return { success: false, error: `Table not found` };
-
-      const whereCol = updateMatch[3];
-      const whereVal = isNaN(Number(updateMatch[4])) ? updateMatch[4] : Number(updateMatch[4]);
-      
+      const whereCol = match[3];
+      const whereVal = isNaN(Number(match[4])) ? match[4] : Number(match[4]);
       const rowToUpdate = table.data.find(r => r[whereCol] == whereVal);
       if (!rowToUpdate) return { success: false, error: `Row not found` };
-
-      const setClauses = updateMatch[2].split(',');
+      const setClauses = match[2].split(',');
       setClauses.forEach(clause => {
           const [col, val] = clause.split('=').map(s => s.trim().replace(/[`']/g, ''));
           rowToUpdate[col] = isNaN(Number(val)) ? val : Number(val);
       });
       return { success: true, message: `1 row updated.`, rowsAffected: 1 };
+    }
+  },
+  // DELETE
+  {
+    regex: /^delete from/i,
+    handler: (query, currentDb) => {
+      const db = mockServer.value[currentDb];
+      if (!db) return { success: false, error: 'No database selected.' };
+      const match = /delete from\s+`?(\w+)`?\s+where\s+`?(\w+)`?\s+in\s+\(([^)]+)\)/i.exec(query);
+      if (!match) return null;
+      const tableName = match[1];
+      const table = db[tableName];
+      if (!table) return { success: false, error: `Table '${tableName}' not found.` };
+      const whereCol = match[2];
+      const idsToDelete = match[3].split(',').map(id => parseInt(id.trim()));
+      const initialCount = table.data.length;
+      table.data = table.data.filter(row => !idsToDelete.includes(row[whereCol]));
+      const rowsAffected = initialCount - table.data.length;
+      table.rows = table.data.length;
+      return { success: true, message: `${rowsAffected} row(s) deleted.`, rowsAffected };
+    }
+  }
+];
+
+const mockQueryProcessor = async (query: string, currentDb: string): Promise<QueryResult> => {
+  await simulateNetworkDelay();
+  const startTime = performance.now();
+  const normalizedQuery = query.trim().replace(/;$/, '');
+  mockServerStats.queriesProcessed++;
+
+  for (const route of queryHandlers) {
+    if (route.regex.test(normalizedQuery)) {
+      const result = route.handler(normalizedQuery, currentDb);
+      if (result) {
+        return { ...result, executionTime: Math.round(performance.now() - startTime) };
+      }
+    }
   }
 
-  const deleteMatch = /delete from\s+`?(\w+)`?\s+where\s+`?(\w+)`?\s+in\s+\(([^)]+)\)/.exec(normalizedQuery);
-  if (deleteMatch) {
-    const tableName = deleteMatch[1];
-    const table = db[tableName];
-    if (!table) return { success: false, error: `Table '${tableName}' not found.` };
-    
-    const whereCol = deleteMatch[2];
-    const idsToDelete = deleteMatch[3].split(',').map(id => parseInt(id.trim()));
-    
-    const initialCount = table.data.length;
-    table.data = table.data.filter(row => !idsToDelete.includes(row[whereCol]));
-    const rowsAffected = initialCount - table.data.length;
-    table.rows = table.data.length;
-    
-    return { success: true, message: `${rowsAffected} row(s) deleted.`, rowsAffected, executionTime: getExecutionTime() };
-  }
-
-  return { success: false, error: `Unsupported or invalid SQL query in demo mode: ${normalizedQuery.substring(0, 50)}...` };
+  return { success: false, error: `Unsupported or invalid SQL query in demo mode: ${normalizedQuery.substring(0, 50)}...`, executionTime: Math.round(performance.now() - startTime) };
 };
 
 export const resetMockData = () => {
   mockServer.value = cloneDeep(initialMockServer);
+  mockServerStats = {
+    startTime: Date.now(),
+    queriesProcessed: 0,
+  };
 };
 
 export const apiService = {
@@ -410,10 +467,6 @@ export const apiService = {
         }
         const result = await this.executeQuery(query, { ...connection, database: currentDb });
         results.push(result);
-        if (!result.success) {
-            // Optionally stop on first error
-            // break;
-        }
     }
     return results;
   },
@@ -423,6 +476,16 @@ export const apiService = {
   getMockServerState: () => {
     if (backendAvailable === false) {
       return cloneDeep(mockServer.value);
+    }
+    return null;
+  },
+
+  getMockServerStats: () => {
+    if (backendAvailable === false) {
+      return {
+        ...mockServerStats,
+        uptime: Date.now() - mockServerStats.startTime,
+      };
     }
     return null;
   }
